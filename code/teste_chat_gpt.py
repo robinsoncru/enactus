@@ -6,11 +6,14 @@ import torch.nn as nn
 import torch.optim as optim
 import matplotlib.pyplot as plt
 
+taille_image = 128
+
 # Transformation des images
-def get_dataloader(batch_size=64):
+def get_dataloader(batch_size=taille_image):
     transform = transforms.Compose([
+        transforms.Resize((taille_image, taille_image)),  # Redimensionner les images à 64x64
         transforms.ToTensor(),
-        transforms.Normalize((0.5,), (0.5,))  # Normalisation pour niveaux de gris
+        # transforms.Normalize((0.5,), (0.5,))  # Normalisation pour niveaux de gris
     ])
 
     # Charger FashionMNIST
@@ -24,7 +27,7 @@ class Generator(nn.Module):
         self.fc1 = nn.Linear(100, 256)
         self.fc2 = nn.Linear(256, 512)
         self.fc3 = nn.Linear(512, 1024)
-        self.fc4 = nn.Linear(1024, 1 * 28 * 28)  # 1 canal pour image 28x28 (niveaux de gris)
+        self.fc4 = nn.Linear(1024, 1 * taille_image * taille_image)  # 1 canal pour image 28x28 (niveaux de gris) : je crée les images et je me fous de la couleur
         self.relu = nn.ReLU()
         self.tanh = nn.Tanh()
 
@@ -33,13 +36,13 @@ class Generator(nn.Module):
         z = self.relu(self.fc2(z))
         z = self.relu(self.fc3(z))
         z = self.tanh(self.fc4(z))
-        return z.view(-1, 1, 28, 28)  # Redimensionner en image 28x28
+        return z.view(-1, 1, taille_image, taille_image)  # Redimensionner en image 28x28
 
 # Définir le Discriminateur
 class Discriminator(nn.Module):
     def __init__(self):
         super(Discriminator, self).__init__()
-        self.fc1 = nn.Linear(1 * 28 * 28, 1024)  # Entrée : image 28x28x1
+        self.fc1 = nn.Linear(1 * taille_image * taille_image, 1024)  # Entrée : image 28x28x1
         self.fc2 = nn.Linear(1024, 512)
         self.fc3 = nn.Linear(512, 256)
         self.fc4 = nn.Linear(256, 1)  # Sortie : probabilité réelle (1) ou générée (0)
@@ -47,7 +50,7 @@ class Discriminator(nn.Module):
         self.sigmoid = nn.Sigmoid()
 
     def forward(self, img):
-        img = img.view(-1, 1 * 28 * 28)  # Redimensionner l'image
+        img = img.view(-1, 1 * taille_image * taille_image)  # Redimensionner l'image
         img = self.leaky_relu(self.fc1(img))
         img = self.leaky_relu(self.fc2(img))
         img = self.leaky_relu(self.fc3(img))
@@ -63,8 +66,24 @@ def initialize_gan():
     optimizer_d = optim.Adam(discriminator.parameters(), lr=0.0002, betas=(0.5, 0.999))
     return generator, discriminator, criterion, optimizer_g, optimizer_d
 
+
+def load_discri_gene():
+    # Charger les poids
+    generator.load_state_dict(torch.load('generator_weights.pth'))
+    discriminator.load_state_dict(torch.load('discriminator_weights.pth'))
+    return generator, discriminator
+
+def initialize_gan_and_load():
+    generator = Generator().cuda()
+    discriminator = Discriminator().cuda()
+    generator, discriminator = load_discri_gene()
+    criterion = nn.BCELoss()
+    optimizer_g = optim.Adam(generator.parameters(), lr=0.0002, betas=(0.5, 0.999))
+    optimizer_d = optim.Adam(discriminator.parameters(), lr=0.0002, betas=(0.5, 0.999))
+    return generator, discriminator, criterion, optimizer_g, optimizer_d
+
 # Entraîner le GAN
-def train_gan(generator, discriminator, criterion, optimizer_g, optimizer_d, trainloader, num_epochs=100):
+def train_gan(generator, discriminator, criterion, optimizer_g, optimizer_d, trainloader, num_epochs=50, check_view=5):
     for epoch in range(num_epochs):
         for i, (imgs, _) in enumerate(trainloader):
             # Préparer les données réelles
@@ -83,7 +102,7 @@ def train_gan(generator, discriminator, criterion, optimizer_g, optimizer_d, tra
             loss_real = criterion(output_real, labels_real)
 
             # Perte sur les images générées
-            z = torch.randn(batch_size, 100).cuda()
+            z = torch.randn(batch_size, 100).cuda() # Mettre l'image du corps sur lequel on veut poser le vetement
             fake_imgs = generator(z)
             output_fake = discriminator(fake_imgs.detach())
             loss_fake = criterion(output_fake, labels_fake)
@@ -105,7 +124,7 @@ def train_gan(generator, discriminator, criterion, optimizer_g, optimizer_d, tra
         print(f"Epoch [{epoch + 1}/{num_epochs}], Loss D: {loss_d.item()}, Loss G: {loss_g.item()}")
 
         # Afficher des images générées toutes les 10 époques
-        if (epoch + 1) % 50 == 0:
+        if (epoch + 1) % check_view == 0:
             show_generated_images(fake_imgs)
 
 # Affichage des images générées
@@ -115,7 +134,7 @@ def show_generated_images(images):
     plt.figure(figsize=(10, 10))
     for i in range(10):
         plt.subplot(1, 10, i + 1)
-        plt.imshow(images[i] * 0.5 + 0.5, cmap='gray')  # Re-scaler de [-1, 1] à [0, 1]
+        plt.imshow(images[i] * 0.5 + 0.5)  # Re-scaler de [-1, 1] à [0, 1]
         plt.axis('off')
     plt.show()
 
@@ -124,15 +143,26 @@ def download_discr_gene(generator, discriminator):
     torch.save(generator.state_dict(), 'generator_weights.pth')
     torch.save(discriminator.state_dict(), 'discriminator_weights.pth')
 
-def load_discri_gene():
-    # Charger les poids
-    generator.load_state_dict(torch.load('generator_weights.pth'))
-    discriminator.load_state_dict(torch.load('discriminator_weights.pth'))
-    return generator, discriminator
 
+# Affichage des images du trainloader
+def show_batch_images(trainloader):
+    # Obtenir un batch d'images
+    dataiter = iter(trainloader)
+    images, labels = next(dataiter)
+    images = images.cpu().numpy().transpose(0, 2, 3, 1)  # Redimensionner pour (batch_size, H, W, C)
+    images = images.squeeze()  # Retirer le canal de couleurs pour le mode niveau de gris
+
+    plt.figure(figsize=(10, 10))
+    for i in range(len(images)):
+        # plt.subplot(1, len(images), i + 1)
+        plt.imshow(images[i] * 0.5 + 0.5)  # Re-scaler de [-1, 1] à [0, 1]
+        plt.axis('off')
+    plt.show()
 
 # Lancer l'entraînement
 trainloader = get_dataloader()
+# show_batch_images(trainloader)
 generator, discriminator, criterion, optimizer_g, optimizer_d = initialize_gan()
+# load_discri_gene()
 train_gan(generator, discriminator, criterion, optimizer_g, optimizer_d, trainloader)
 download_discr_gene(generator, discriminator)
